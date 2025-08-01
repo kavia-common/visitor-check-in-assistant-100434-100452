@@ -1,0 +1,4 @@
+{
+    "command": "pytest",
+    "working_directory": "/home/kavia/workspace/code-generation/visitor-check-in-assistant-100434-100452/visitor_management_backend"
+}
