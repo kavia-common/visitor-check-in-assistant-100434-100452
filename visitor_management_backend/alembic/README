@@ -1,0 +1,2 @@
+This folder contains Alembic migration scripts for the Visitor Management Backend.
+Auto-generated and custom migration scripts should be placed under "versions/".
