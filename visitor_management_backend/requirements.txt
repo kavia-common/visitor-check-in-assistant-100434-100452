@@ -53,3 +53,7 @@ pyttsx3>=2.90
 sqlalchemy>=2.0
 psycopg2-binary>=2.9
 alembic>=1.13
+
+# Notification dependencies
+twilio>=9.0.0
+requests>=2.31.0

@@ -324,20 +324,129 @@ async def text_to_speech_stub(request: TextToSpeechRequest):
 
 # -------------------- Notifications --------------------
 
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import requests
+
+# Twilio config (optional, only if set)
+try:
+    from twilio.rest import Client as TwilioClient
+except ImportError:
+    TwilioClient = None
+
 # PUBLIC_INTERFACE
 @app.post("/api/notifications/notify-host", tags=["notifications"])
 def notify_host(body: Dict[str, Any] = Body(...)):
     """
-    API to trigger host notifications (stub, to integrate with mail/SMS/Slack).
+    API to trigger host notifications.
+    Sends email via SMTP, SMS via Twilio, or webhook as per env config.
     Expects at minimum: host_email and visitor info.
+    Returns status and which methods were attempted.
     """
-    # In reality: call mail, SMS, push service here
+    # Gather environment vars for notification services
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", 587))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASS")
+    smtp_from = os.getenv("SMTP_FROM", smtp_user)
+    smtp_use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in ("true", "1")
+    smtp_enabled = all([smtp_host, smtp_port, smtp_user, smtp_pass])
+
+    twilio_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    twilio_token = os.getenv("TWILIO_AUTH_TOKEN")
+    twilio_from = os.getenv("TWILIO_FROM")
+    twilio_enabled = TwilioClient and all([twilio_sid, twilio_token, twilio_from])
+
+    webhook_url = os.getenv("NOTIFY_WEBHOOK_URL")
+    webhook_enabled = bool(webhook_url)
+
     host_email = body.get("host_email")
+    host_phone = body.get("host_phone")
     visitor_name = body.get("visitor_name")
-    if not host_email or not visitor_name:
-        raise HTTPException(400, "host_email and visitor_name required")
-    # Actual notification sending logic goes here
-    return {"status": "sent", "host_email": host_email, "visitor_name": visitor_name}
+    visitor_info = body.get("visitor_info")
+    visit_purpose = body.get("purpose", "")
+    custom_message = body.get("message")
+    # Body can have other fields, like visitor details
+
+    if not host_email and not host_phone and not webhook_enabled:
+        raise HTTPException(400, "At least one of host_email, host_phone, or NOTIFY_WEBHOOK_URL required")
+    if not visitor_name:
+        raise HTTPException(400, "visitor_name required")
+
+    notification_results = []
+    errors = []
+
+    # --- EMAIL ---
+    if smtp_enabled and host_email:
+        try:
+            subject = f"Visitor Arrival Notification: {visitor_name}"
+            text_content = custom_message or (
+                f"Hello,\n\nVisitor '{visitor_name}' has arrived."
+                f"\nPurpose: {visit_purpose}\nDetails: {visitor_info}"
+            )
+
+            msg = MIMEMultipart()
+            msg["From"] = smtp_from
+            msg["To"] = host_email
+            msg["Subject"] = subject
+            msg.attach(MIMEText(text_content, "plain"))
+
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+                if smtp_use_tls:
+                    server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_from, host_email, msg.as_string())
+            notification_results.append("smtp_email")
+        except Exception as ex:
+            errors.append(f"Email error: {str(ex)}")
+
+    # --- SMS (Twilio) ---
+    if twilio_enabled and host_phone:
+        try:
+            sms_content = custom_message or (
+                f"Visitor '{visitor_name}' has arrived. Purpose: {visit_purpose}"
+            )
+            client = TwilioClient(twilio_sid, twilio_token)
+            client.messages.create(
+                body=sms_content,
+                from_=twilio_from,
+                to=host_phone
+            )
+            notification_results.append("twilio_sms")
+        except Exception as ex:
+            errors.append(f"SMS error: {str(ex)}")
+
+    # --- Webhook ---
+    if webhook_enabled:
+        try:
+            payload = {
+                "event": "visitor_arrival",
+                "host_email": host_email,
+                "host_phone": host_phone,
+                "visitor_name": visitor_name,
+                "visitor_info": visitor_info,
+                "visit_purpose": visit_purpose
+            }
+            requests.post(webhook_url, json=payload, timeout=10)
+            notification_results.append("webhook")
+        except Exception as ex:
+            errors.append(f"Webhook error: {str(ex)}")
+
+    if not notification_results:
+        raise HTTPException(
+            500,
+            f"Could not deliver notification. Errors: {errors}"
+        )
+
+    return {
+        "status": "sent",
+        "methods": notification_results,
+        "errors": errors or None,
+        "host_email": host_email,
+        "host_phone": host_phone,
+        "visitor_name": visitor_name
+    }
 
 # -------------------- Admin Dashboard Endpoints --------------------
 
