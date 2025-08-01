@@ -42,6 +42,13 @@ uvloop==0.21.0
 watchfiles==1.0.5
 websockets==15.0.1
 
+# OCR, TTS, STT AI/ML dependencies
+pytesseract>=0.3.10
+Pillow>=10.0.0
+speechrecognition>=3.10.0
+pyaudio>=0.2.13
+pyttsx3>=2.90
+
 # ORM and migration dependencies
 sqlalchemy>=2.0
 psycopg2-binary>=2.9

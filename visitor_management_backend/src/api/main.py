@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
@@ -10,6 +10,12 @@ import datetime
 
 from .database import get_db
 from .models import Visitor, VisitLog, Host, AdminUser
+
+from .ai_services import (
+    perform_ocr_on_image,
+    perform_speech_to_text,
+    perform_text_to_speech,
+)
 
 app = FastAPI(
     title="Visitor Management Kiosk Backend",
@@ -252,16 +258,22 @@ def visitor_checkin_finalize(payload: Dict[str, Any], db: Session = Depends(get_
 async def upload_id_ocr(file: UploadFile = File(...)):
     """
     Accepts an ID card/passport image.
-    (Stub: In production, integrates with OCR service.)
-    Returns extracted fields (dummy/demo data).
+    Integrates with Tesseract OCR (if available).
+    Returns extracted fields (OCR output or fallback).
     """
-    ext_fields = {
-        "full_name": "Demo Person",
-        "id_number": "ID123456789",
-        "dob": "1990-01-01"
-    }
-    # In real use: call OCR library/service on file.file
-    return {"status": "success", "ocr_fields": ext_fields, "filename": file.filename}
+    image_bytes = await file.read()
+    ocr_result = perform_ocr_on_image(image_bytes)
+    if "error" in ocr_result:
+        ext_fields = {
+            "full_name": "Demo Person",
+            "id_number": "ID123456789",
+            "dob": "1990-01-01"
+        }
+        return JSONResponse(
+            {"status": "fallback", "ocr_fields": ext_fields, "filename": file.filename, "message": ocr_result["error"]}
+        )
+    else:
+        return {"status": "success", "ocr_fields": ocr_result, "filename": file.filename}
 
 # -------------------- Speech AI (STT & TTS) --------------------
 
@@ -275,26 +287,33 @@ class TextToSpeechRequest(BaseModel):
 
 # PUBLIC_INTERFACE
 @app.post("/api/speech/stt", tags=["speech"])
-async def speech_to_text_stub(file: UploadFile = File(...), language: Optional[str] = Form("en")):
+async def speech_to_text_stub(file: UploadFile = File(...), language: Optional[str] = Form("en-US")):
     """
-    Accepts audio file; returns dummy text (stub for STT model).
+    Accepts audio file; returns speech-to-text transcript.
     """
-    # In real system, pipe audio to AI/Cloud for STT
-    transcript = "This is a dummy transcript of the audio (real STT required)."
-    return {"transcript": transcript, "language": language, "filename": file.filename}
+    audio_bytes = await file.read()
+    stt_result = perform_speech_to_text(audio_bytes, language=language or "en-US")
+    if "error" in stt_result:
+        transcript = "This is a dummy transcript of the audio (could not perform real STT: %s)" % stt_result["error"]
+        return {"transcript": transcript, "language": language, "filename": file.filename}
+    return {**stt_result, "filename": file.filename}
 
 # PUBLIC_INTERFACE
 @app.post("/api/speech/tts", tags=["speech"])
 async def text_to_speech_stub(request: TextToSpeechRequest):
     """
-    Accepts text and returns speech audio (stub for TTS).
-    Responds with a dummy audio stream.
+    Accepts text and returns speech audio stream (TTS).
+    Responds with real audio if TTS available, else dummy wav.
     """
-    # In prod: integrate with a TTS engine; here we return demo audio (small WAV header with silence)
-    wav = b'RIFF$\x00\x00\x00WAVEfmt ' \
-          b'\x10\x00\x00\x00\x01\x00\x01\x00D\xac\x00\x00\x88X\x01\x00' \
-          b'\x02\x00\x10\x00data\x00\x00\x00\x00'
-    return StreamingResponse(io.BytesIO(wav), media_type="audio/wav")
+    wav_data = perform_text_to_speech(request.text, request.language or "en")
+    if not wav_data:
+        # Fallback: return demo WAV header w/silence
+        wav_data = (
+            b'RIFF$\x00\x00\x00WAVEfmt '
+            b'\x10\x00\x00\x00\x01\x00\x01\x00D\xac\x00\x00\x88X\x01\x00'
+            b'\x02\x00\x10\x00data\x00\x00\x00\x00'
+        )
+    return StreamingResponse(io.BytesIO(wav_data), media_type="audio/wav")
 
 # -------------------- Notifications --------------------
 
